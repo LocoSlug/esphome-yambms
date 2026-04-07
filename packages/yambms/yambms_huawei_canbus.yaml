@@ -1,0 +1,173 @@
+# =============================================
+# Huawei R4875G1 Dedicated CAN Bus Package
+# Separate CAN interface for 3× R4875G1 rectifiers (parallel on same bus)
+# Compatible with YamBMS dev branch
+# =============================================
+
+substitutions:
+  huawei_can_name: "Huawei R4875G1 CAN"
+
+# === Dedicated CAN Bus for Huawei (125kbps, extended frames) ===
+canbus:
+  - platform: esp32
+    id: canbus_huawei
+    name: "${friendly_name} Huawei CAN"
+    tx_pin: GPIO1          # ← CHANGE to your actual TX pin for Huawei
+    rx_pin: GPIO2          # ← CHANGE to your actual RX pin for Huawei
+    bit_rate: 125kbps
+    # You can add more options if needed (e.g. acknowledge, etc.)
+
+    # Status monitoring from R4875G1 modules
+    on_frame:
+      - can_id: 0x108111FE
+        then:
+          - lambda: |-
+              if (x.size() >= 8) {
+                float voltage = ((x[0] << 8) | x[1]) / 1024.0;
+                float current = ((x[2] << 8) | x[3]) / 30.0;
+                float power   = voltage * current;
+                float temp    = x[4] - 40.0;   # common temperature offset
+
+                id(huawei_output_voltage).publish_state(voltage);
+                id(huawei_output_current).publish_state(current);
+                id(huawei_output_power).publish_state(power);
+                id(huawei_module_temp).publish_state(temp);
+
+                ESP_LOGD("huawei_status", "Huawei Status: %.2fV | %.2fA | %.0fW | %.1f°C", 
+                         voltage, current, power, temp);
+              }
+
+      # You can add more on_frame handlers here later if needed (alarms, other status frames)
+
+# === Huawei Control Logic (Enable/Disable, Share with LuxPower, etc.) ===
+switch:
+  - platform: template
+    name: "${friendly_name} Huawei Control Enabled"
+    id: huawei_control_enabled
+    icon: "mdi:power"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    turn_on_action:
+      - logger.log: "Huawei R4875G1 control ENABLED"
+    turn_off_action:
+      - logger.log: "Huawei R4875G1 control DISABLED"
+      - lambda: |-
+          // Force zero current when disabled
+          id(canbus_huawei).send(0x108180FE, false, {0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+
+number:
+  - platform: template
+    name: "${friendly_name} Huawei - Number of Units"
+    id: huawei_num_chargers
+    icon: "mdi:counter"
+    unit_of_measurement: "units"
+    min_value: 1
+    max_value: 8
+    step: 1
+    mode: box
+    initial_value: 3
+    restore_value: true
+
+  - platform: template
+    name: "${friendly_name} Huawei - Charge Share % (vs LuxPower)"
+    id: huawei_charge_share_percent
+    icon: "mdi:percent"
+    unit_of_measurement: "%"
+    min_value: 0
+    max_value: 100
+    step: 5
+    mode: slider
+    initial_value: 100
+    restore_value: true
+
+sensor:
+  - platform: template
+    name: "${friendly_name} Huawei Group Share Current"
+    id: huawei_group_share_current
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+    icon: "mdi:current-dc"
+
+  - platform: template
+    name: "${friendly_name} LuxPower Remaining Current"
+    id: luxpower_remaining_current
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+    icon: "mdi:current-dc"
+
+  - platform: template
+    name: "${friendly_name} Huawei Per-Unit Current"
+    id: huawei_per_unit_current
+    unit_of_measurement: "A"
+    accuracy_decimals: 2
+
+  - platform: template
+    name: "${friendly_name} Huawei Output Voltage"
+    id: huawei_output_voltage
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+
+  - platform: template
+    name: "${friendly_name} Huawei Output Current"
+    id: huawei_output_current
+    unit_of_measurement: "A"
+    accuracy_decimals: 2
+
+  - platform: template
+    name: "${friendly_name} Huawei Output Power"
+    id: huawei_output_power
+    unit_of_measurement: "W"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "${friendly_name} Huawei Module Temperature"
+    id: huawei_module_temp
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+
+# === Main Huawei Control Loop (must refresh every 500ms) ===
+interval:
+  - interval: 500ms
+    then:
+      - lambda: |-
+          if (!id(huawei_control_enabled).state) {
+            return;
+          }
+
+          float total_v = id(${yambms_id}_requested_charge_voltage).state;
+          float total_i = id(${yambms_id}_requested_charge_current).state;
+
+          int num_units = (int)id(huawei_num_chargers).state;
+          if (num_units < 1) num_units = 1;
+
+          float share = id(huawei_charge_share_percent).state / 100.0;
+          float huawei_total_i = total_i * share;
+          float per_unit_i = huawei_total_i / num_units;
+          float per_unit_v = total_v;
+
+          // Safety clamps
+          if (per_unit_v < 48.0) per_unit_v = 48.0;
+          if (per_unit_v > 58.0) per_unit_v = 58.0;
+          if (per_unit_i < 0.0) per_unit_i = 0.0;
+          if (per_unit_i > 75.0) per_unit_i = 75.0;
+
+          // Scaling (Voltage × 1024, Current × 30)
+          uint16_t v_scaled = (uint16_t)round(per_unit_v * 1024.0);
+          uint8_t vh = (v_scaled >> 8) & 0xFF;
+          uint8_t vl = v_scaled & 0xFF;
+
+          uint16_t i_scaled = (uint16_t)round(per_unit_i * 30.0);
+          uint8_t ih = (i_scaled >> 8) & 0xFF;
+          uint8_t il = i_scaled & 0xFF;
+
+          ESP_LOGD("huawei_r48xx", "Share %.0f%% | Huawei %.1fA (%.2fA per unit) | V=%.2fV",
+                   share*100, huawei_total_i, per_unit_i, per_unit_v);
+
+          // Publish values
+          id(huawei_group_share_current).publish_state(huawei_total_i);
+          id(luxpower_remaining_current).publish_state(total_i - huawei_total_i);
+          id(huawei_per_unit_current).publish_state(per_unit_i);
+
+          // Send limits (broadcast to all 3 units)
+          id(canbus_huawei).send(0x108180FE, false, {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, vh, vl}); // Voltage limit
+          id(canbus_huawei).send(0x108180FE, false, {0x01, 0x03, 0x00, 0x00, 0x00, 0x00, ih, il}); // Current limit
