@@ -37,8 +37,8 @@ substitutions:
   tx_pin_3: '5'
   rx_pin_3: '6'
   # canbus_esp32_can         CAN port
-  tx_pin_4: '15'
-  rx_pin_4: '16'
+  #tx_pin_4: '15'
+  #rx_pin_4: '16'
   # canbus_mcp2515
   spi_mosi_pin: '11'
   spi_miso_pin: '13'
