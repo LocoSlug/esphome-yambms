@@ -9,7 +9,7 @@ substitutions:
 
 # === Dedicated CAN Bus for Huawei (125kbps, extended frames) ===
 canbus:
-  - platform: esp32
+  - platform: esp32_can
     id: canbus_huawei
     name: "${friendly_name} Huawei CAN"
     tx_pin: GPIO1          # ← CHANGE to your actual TX pin for Huawei
