@@ -1,22 +1,21 @@
 # =============================================
 # Huawei R4875G1 Dedicated CAN Bus Package
-# Separate CAN for 3× R4875G1 rectifiers
+# Separate CAN for 3× R4875G1
 # =============================================
 
 substitutions:
   huawei_can_name: "Huawei R4875G1 CAN"
 
-# === Dedicated CAN Bus for Huawei (125kbps) ===
+# === Dedicated CAN Bus for Huawei ===
 canbus:
   - platform: esp32_can
     id: canbus_huawei
     tx_pin: GPIO1                # ← CHANGE to your actual Huawei TX pin
     rx_pin: GPIO2                # ← CHANGE to your actual Huawei RX pin
     bit_rate: 125kbps
-    can_id: 0x100                # Default transmit ID (arbitrary, not really used for sending)
-    use_extended_id: true        # Important for Huawei protocol
+    can_id: 0x100                # dummy default transmit ID
+    use_extended_id: true        # Important for Huawei
 
-    # Status monitoring from R4875G1 (extended ID)
     on_frame:
       - can_id: 0x108111FE
         use_extended_id: true
@@ -49,8 +48,11 @@ switch:
       - logger.log: "Huawei R4875G1 control ENABLED"
     turn_off_action:
       - logger.log: "Huawei R4875G1 control DISABLED"
-      - lambda: |-
-          id(canbus_huawei).send(0x108180FE, true, {0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+      - canbus.send:
+          canbus_id: canbus_huawei
+          can_id: 0x108180FE
+          use_extended_id: true
+          data: [0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
 
 number:
   - platform: template
@@ -128,42 +130,74 @@ sensor:
 interval:
   - interval: 500ms
     then:
-      - lambda: |-
-          if (!id(huawei_control_enabled).state) {
-            return;
-          }
+      - if:
+          condition:
+            switch.is_on: huawei_control_enabled
+          then:
+            - lambda: |-
+                float total_v = id(${yambms_id}_requested_charge_voltage).state;
+                float total_i = id(${yambms_id}_requested_charge_current).state;
 
-          float total_v = id(${yambms_id}_requested_charge_voltage).state;
-          float total_i = id(${yambms_id}_requested_charge_current).state;
+                int num_units = (int)id(huawei_num_chargers).state;
+                if (num_units < 1) num_units = 1;
 
-          int num_units = (int)id(huawei_num_chargers).state;
-          if (num_units < 1) num_units = 1;
+                float share = id(huawei_charge_share_percent).state / 100.0;
+                float huawei_total_i = total_i * share;
+                float per_unit_i = huawei_total_i / num_units;
+                float per_unit_v = total_v;
 
-          float share = id(huawei_charge_share_percent).state / 100.0;
-          float huawei_total_i = total_i * share;
-          float per_unit_i = huawei_total_i / num_units;
-          float per_unit_v = total_v;
+                if (per_unit_v < 48.0) per_unit_v = 48.0;
+                if (per_unit_v > 58.0) per_unit_v = 58.0;
+                if (per_unit_i < 0.0) per_unit_i = 0.0;
+                if (per_unit_i > 75.0) per_unit_i = 75.0;
 
-          if (per_unit_v < 48.0) per_unit_v = 48.0;
-          if (per_unit_v > 58.0) per_unit_v = 58.0;
-          if (per_unit_i < 0.0) per_unit_i = 0.0;
-          if (per_unit_i > 75.0) per_unit_i = 75.0;
+                uint16_t v_scaled = (uint16_t)round(per_unit_v * 1024.0);
+                uint8_t vh = (v_scaled >> 8) & 0xFF;
+                uint8_t vl = v_scaled & 0xFF;
 
-          uint16_t v_scaled = (uint16_t)round(per_unit_v * 1024.0);
-          uint8_t vh = (v_scaled >> 8) & 0xFF;
-          uint8_t vl = v_scaled & 0xFF;
+                uint16_t i_scaled = (uint16_t)round(per_unit_i * 30.0);
+                uint8_t ih = (i_scaled >> 8) & 0xFF;
+                uint8_t il = i_scaled & 0xFF;
 
-          uint16_t i_scaled = (uint16_t)round(per_unit_i * 30.0);
-          uint8_t ih = (i_scaled >> 8) & 0xFF;
-          uint8_t il = i_scaled & 0xFF;
+                ESP_LOGD("huawei_r48xx", "Share %.0f%% | Huawei %.1fA (%.2fA/unit) | V=%.2fV", 
+                         share*100, huawei_total_i, per_unit_i, per_unit_v);
 
-          ESP_LOGD("huawei_r48xx", "Share %.0f%% | Huawei %.1fA (%.2fA/unit) | V=%.2fV", 
-                   share*100, huawei_total_i, per_unit_i, per_unit_v);
+                id(huawei_group_share_current).publish_state(huawei_total_i);
+                id(luxpower_remaining_current).publish_state(total_i - huawei_total_i);
+                id(huawei_per_unit_current).publish_state(per_unit_i);
 
-          id(huawei_group_share_current).publish_state(huawei_total_i);
-          id(luxpower_remaining_current).publish_state(total_i - huawei_total_i);
-          id(huawei_per_unit_current).publish_state(per_unit_i);
+            # Send Voltage limit
+            - canbus.send:
+                canbus_id: canbus_huawei
+                can_id: 0x108180FE
+                use_extended_id: true
+                data: !lambda |-
+                  float total_v = id(${yambms_id}_requested_charge_voltage).state;
+                  float per_unit_v = total_v;
+                  if (per_unit_v < 48.0) per_unit_v = 48.0;
+                  if (per_unit_v > 58.0) per_unit_v = 58.0;
+                  uint16_t v_scaled = (uint16_t)round(per_unit_v * 1024.0);
+                  return {(uint8_t)0x01, (uint8_t)0x00, (uint8_t)0x00, (uint8_t)0x00,
+                          (uint8_t)0x00, (uint8_t)0x00,
+                          (uint8_t)((v_scaled >> 8) & 0xFF),
+                          (uint8_t)(v_scaled & 0xFF)};
 
-          // Send with extended ID = true
-          id(canbus_huawei).send(0x108180FE, true, {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, vh, vl}); // Voltage
-          id(canbus_huawei).send(0x108180FE, true, {0x01, 0x03, 0x00, 0x00, 0x00, 0x00, ih, il}); // Current
+            # Send Current limit
+            - canbus.send:
+                canbus_id: canbus_huawei
+                can_id: 0x108180FE
+                use_extended_id: true
+                data: !lambda |-
+                  float total_i = id(${yambms_id}_requested_charge_current).state;
+                  int num_units = (int)id(huawei_num_chargers).state;
+                  if (num_units < 1) num_units = 1;
+                  float share = id(huawei_charge_share_percent).state / 100.0;
+                  float per_unit_i = (total_i * share) / num_units;
+                  if (per_unit_i < 0.0) per_unit_i = 0.0;
+                  if (per_unit_i > 75.0) per_unit_i = 75.0;
+
+                  uint16_t i_scaled = (uint16_t)round(per_unit_i * 30.0);
+                  return {(uint8_t)0x01, (uint8_t)0x03, (uint8_t)0x00, (uint8_t)0x00,
+                          (uint8_t)0x00, (uint8_t)0x00,
+                          (uint8_t)((i_scaled >> 8) & 0xFF),
+                          (uint8_t)(i_scaled & 0xFF)};
