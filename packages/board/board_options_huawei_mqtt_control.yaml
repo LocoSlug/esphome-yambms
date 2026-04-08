@@ -1,0 +1,114 @@
+# =============================================
+# Huawei R4875G1 Control via MQTT (for main YamBMS Node 1)
+# All UI, share logic, and 5-second MQTT publishing
+# Node 3 receives and repeats with 15s watchdog
+# =============================================
+
+mqtt:
+  # Make sure these are defined in your main YAML or secrets if not already present
+  broker: !secret huawei_mqtt_host
+  username: !secret huawei_mqtt_username
+  password: !secret huawei_mqtt_password
+
+# === User Controls (visible in Home Assistant) ===
+switch:
+  - platform: template
+    name: "${friendly_name} Huawei Control Enabled"
+    id: huawei_control_enabled
+    icon: "mdi:power"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+number:
+  - platform: template
+    name: "${friendly_name} Huawei - Number of Units"
+    id: huawei_num_chargers
+    icon: "mdi:counter"
+    unit_of_measurement: "units"
+    min_value: 1
+    max_value: 8
+    step: 1
+    mode: box
+    initial_value: 3
+    restore_value: true
+    optimistic: true
+
+  - platform: template
+    name: "${friendly_name} Huawei - Charge Share % (vs LuxPower)"
+    id: huawei_charge_share_percent
+    icon: "mdi:percent"
+    unit_of_measurement: "%"
+    min_value: 0
+    max_value: 100
+    step: 5
+    mode: slider
+    initial_value: 100
+    restore_value: true
+    optimistic: true
+
+button:
+  - platform: template
+    name: "${friendly_name} Huawei - 100% (All to Huawei)"
+    id: huawei_preset_100
+    icon: "mdi:battery-charging-100"
+    on_press:
+      - number.set:
+          id: huawei_charge_share_percent
+          value: 100
+      - switch.turn_on: huawei_control_enabled
+
+  - platform: template
+    name: "${friendly_name} Huawei - 50/50 Share"
+    id: huawei_preset_50
+    icon: "mdi:battery-charging-50"
+    on_press:
+      - number.set:
+          id: huawei_charge_share_percent
+          value: 50
+      - switch.turn_on: huawei_control_enabled
+
+  - platform: template
+    name: "${friendly_name} Huawei - Off"
+    id: huawei_preset_off
+    icon: "mdi:battery-charging-off"
+    on_press:
+      - switch.turn_off: huawei_control_enabled
+      - number.set:
+          id: huawei_charge_share_percent
+          value: 0
+
+# === Publish final per-unit limits to Node 3 every 5 seconds ===
+interval:
+  - interval: 5s
+    then:
+      - if:
+          condition:
+            switch.is_on: huawei_control_enabled
+          then:
+            - lambda: |-
+                float total_v = id(${yambms_id}_requested_charge_voltage).state;
+                float total_i = id(${yambms_id}_requested_charge_current).state;
+
+                int num = (int)id(huawei_num_chargers).state;
+                if (num < 1) num = 1;
+
+                float share = id(huawei_charge_share_percent).state / 100.0;
+                float per_unit_v = total_v;
+                float per_unit_i = (total_i * share) / num;
+
+                // Safety clamps for R4875G1
+                if (per_unit_v < 48.0) per_unit_v = 48.0;
+                if (per_unit_v > 58.0) per_unit_v = 58.0;
+                if (per_unit_i < 0.0) per_unit_i = 0.0;
+                if (per_unit_i > 75.0) per_unit_i = 75.0;
+
+                // Publish to Node 3
+                id(mqtt_client).publish("yambms/huawei/per_unit_voltage", str(per_unit_v), true);
+                id(mqtt_client).publish("yambms/huawei/per_unit_current", str(per_unit_i), true);
+
+                ESP_LOGD("huawei_main", "MQTT to Node 3: V=%.2fV | I=%.2fA (%.0f%% share, %d units)",
+                         per_unit_v, per_unit_i, share*100, num);
+          else:
+            # Force zero current when disabled
+            id(mqtt_client).publish("yambms/huawei/per_unit_current", "0.0", true);
+            ESP_LOGD("huawei_main", "Huawei disabled - sent 0A to Node 3");
