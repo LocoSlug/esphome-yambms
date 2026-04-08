@@ -67,6 +67,7 @@ number:
     mode: box
     initial_value: 3
     restore_value: true
+    optimistic: true 
 
   - platform: template
     name: "${friendly_name} Huawei - Charge Share % (vs LuxPower)"
@@ -79,6 +80,7 @@ number:
     mode: slider
     initial_value: 100
     restore_value: true
+    optimistic: true 
 
 sensor:
   - platform: template
