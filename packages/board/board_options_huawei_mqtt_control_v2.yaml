@@ -60,7 +60,8 @@ interval:
   - interval: 5s
     then:
       - if:
-          condition: switch.is_on: huawei_control_enabled
+          condition: 
+            switch.is_on: huawei_control_enabled
           then:
             - lambda: |-
                 float total_v = id(${yambms_id}_requested_charge_voltage).state;
