@@ -10,6 +10,7 @@ mqtt:
   broker: !secret mqtt_host
   username: !secret mqtt_username
   password: !secret mqtt_password
+  discovery: false  # we will manage topics manually, no auto-discovery
 
 # === User Controls (visible in Home Assistant) ===
 # === Huawei R4875G1 multi-inverter control (on main Node 1) ===
@@ -88,6 +89,7 @@ interval:
                 if (per_unit_i > 75.0) per_unit_i = 75.0;
 
                 id(huawei_per_unit_current).publish_state(per_unit_i);
+                id(huawei_per_unit_voltage).publish_state(per_unit_v);
 
                 ESP_LOGD("yambms", "MQTT → Huawei: V=%.2fV I=%.2fA (share %.0f%%)", per_unit_v, per_unit_i, share*100);
 
