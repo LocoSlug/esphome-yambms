@@ -84,12 +84,12 @@ interval:
 
                 ESP_LOGD("yambms", "MQTT → Huawei: V=%.2fV I=%.2fA (share %.0f%%)", per_unit_v, per_unit_i, share*100);
 
-            # Publish to MQTT broker
-            - mqtt.publish:
-                topic: "yambms/main/huawei_per_unit_voltage"
-                payload: !lambda "return str(per_unit_v);"
-                retain: true
-            - mqtt.publish:
-                topic: "yambms/main/huawei_per_unit_current"
-                payload: !lambda "return str(per_unit_i);"
-                retain: true
+                # Publish to MQTT broker
+                mqtt.publish:
+                  topic: "yambms/main/huawei_per_unit_voltage"
+                  payload: !lambda "return str(per_unit_v);"
+                  retain: true
+                mqtt.publish:
+                  topic: "yambms/main/huawei_per_unit_current"
+                  payload: !lambda "return str(per_unit_i);"
+                  retain: true
