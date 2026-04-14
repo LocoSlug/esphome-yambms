@@ -5,6 +5,7 @@
 # =============================================
 
 mqtt:
+  id: mqtt_client
   # Make sure these are defined in your main YAML or secrets if not already present
   broker: !secret mqtt_host
   username: !secret mqtt_username
