@@ -56,12 +56,16 @@ sensor:
     update_interval: never   # we'll update manually
     unit_of_measurement: "A"
     accuracy_decimals: 2
+    state_topic: "yambms/main/huawei_per_unit_current"
+    retain: true
   - platform: template
     name: "${friendly_name} Huawei Per Unit Voltage"
     id: huawei_per_unit_voltage
     update_interval: never   # we'll update manually
     unit_of_measurement: "V"
     accuracy_decimals: 2
+    state_topic: "yambms/main/huawei_per_unit_voltage"
+    retain: true
 
 # === Publish final per-unit limits to MQTT broker every 5 seconds ===
 interval:
@@ -94,5 +98,5 @@ interval:
                 ESP_LOGD("yambms", "MQTT → Huawei: V=%.2fV I=%.2fA (share %.0f%%)", per_unit_v, per_unit_i, share*100);
 
                 // Publish via MQTT
-                id(mqtt_client).publish("yambms/main/huawei_per_unit_voltage", to_string(per_unit_v).c_str(), true);
-                id(mqtt_client).publish("yambms/main/huawei_per_unit_current", to_string(per_unit_i).c_str(), true);
+                //id(mqtt_client).publish("yambms/main/huawei_per_unit_voltage", to_string(per_unit_v).c_str(), true);
+                //id(mqtt_client).publish("yambms/main/huawei_per_unit_current", to_string(per_unit_i).c_str(), true);
