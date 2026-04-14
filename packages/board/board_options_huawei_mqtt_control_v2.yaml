@@ -1,0 +1,94 @@
+# =============================================
+# Huawei R4875G1 Control via MQTT (for main YamBMS Node 1)
+# All UI, share logic, and 5-second MQTT publishing
+# Node 3 receives and repeats with 15s watchdog
+# =============================================
+
+mqtt:
+  id: mqtt_client
+  # Make sure these are defined in your main YAML or secrets if not already present
+  broker: !secret mqtt_host
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+
+# === User Controls (visible in Home Assistant) ===
+# === Huawei R4875G1 multi-inverter control (on main Node 1) ===
+switch:
+  - platform: template
+    name: "${friendly_name} Huawei Control Enabled"
+    id: huawei_control_enabled
+    icon: "mdi:power"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+number:
+  - platform: template
+    name: "${friendly_name} Huawei - Number of Units"
+    id: huawei_num_chargers
+    icon: "mdi:counter"
+    unit_of_measurement: "units"
+    min_value: 1
+    max_value: 8
+    step: 1
+    mode: box
+    initial_value: 3
+    restore_value: true
+    optimistic: true
+
+  - platform: template
+    name: "${friendly_name} Huawei - Charge Share % (vs LuxPower)"
+    id: huawei_charge_share_percent
+    icon: "mdi:percent"
+    unit_of_measurement: "%"
+    min_value: 0
+    max_value: 100
+    step: 5
+    mode: slider
+    initial_value: 100
+    restore_value: true
+    optimistic: true
+
+sensor:
+  - platform: template
+    name: "${friendly_name} Huawei Per-Unit Current"
+    id: huawei_per_unit_current
+    unit_of_measurement: "A"
+    accuracy_decimals: 2
+
+# === Publish final per-unit limits to MQTT broker every 5 seconds ===
+interval:
+  - interval: 5s
+    then:
+      - if:
+          condition: switch.is_on: huawei_control_enabled
+          then:
+            - lambda: |-
+                float total_v = id(${yambms_id}_requested_charge_voltage).state;
+                float total_i = id(${yambms_id}_requested_charge_current).state;
+
+                int num = (int)id(huawei_num_chargers).state;
+                if (num < 1) num = 1;
+
+                float share = id(huawei_charge_share_percent).state / 100.0;
+                float per_unit_i = (total_i * share) / num;
+                float per_unit_v = total_v;
+
+                // Safety clamps
+                if (per_unit_v < 48.0) per_unit_v = 48.0;
+                if (per_unit_v > 58.0) per_unit_v = 58.0;
+                if (per_unit_i < 0.0) per_unit_i = 0.0;
+                if (per_unit_i > 75.0) per_unit_i = 75.0;
+
+                id(huawei_per_unit_current).publish_state(per_unit_i);
+
+                ESP_LOGD("yambms", "MQTT → Huawei: V=%.2fV I=%.2fA (share %.0f%%)", per_unit_v, per_unit_i, share*100);
+
+            # Publish to MQTT broker
+            - mqtt.publish:
+                topic: "yambms/main/huawei_per_unit_voltage"
+                payload: !lambda "return str(per_unit_v);"
+                retain: true
+            - mqtt.publish:
+                topic: "yambms/main/huawei_per_unit_current"
+                payload: !lambda "return str(per_unit_i);"
+                retain: true
