@@ -6,9 +6,9 @@
 
 mqtt:
   # Make sure these are defined in your main YAML or secrets if not already present
-  broker: !secret huawei_mqtt_host
-  username: !secret huawei_mqtt_username
-  password: !secret huawei_mqtt_password
+  broker: !secret mqtt_host
+  username: !secret mqtt_username
+  password: !secret mqtt_password
 
 # === User Controls (visible in Home Assistant) ===
 switch:
